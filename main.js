@@ -2018,7 +2018,10 @@ function updateTourBar() {
 function wireExtras() {
   wireSearch();
   wireFullscreen();
-  els.tourBtn.addEventListener('click', () => { speech?.unlock?.(); startTour(); });
+  els.tourBtn.addEventListener('click', () => {
+    if (!tour.active && state.voice) speech?.unlock?.('Starting the tour.'); // inside the tap: unlocks speech on iOS
+    startTour();
+  });
   els.tourPause.addEventListener('click', toggleTourPause);
   els.tourRestart.addEventListener('click', restartTour);
   els.tourStop.addEventListener('click', stopTour);
@@ -2571,6 +2574,10 @@ loadData()
     skyReady = true;
     maybePreloadVoice();
     hideLoading(0);
+    // Deep link: ?c=Orion (or ?c=Ori) opens that constellation, e.g. for sharing.
+    const want = new URLSearchParams(location.search).get('c');
+    const linked = want && consts.find((k) => k.abbr.toLowerCase() === want.toLowerCase() || norm(k.name) === norm(want));
+    if (linked) focusOn(linked);
   })
   .catch((err) => {
     console.error('Night Sky failed to start:', err);

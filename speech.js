@@ -73,6 +73,13 @@ function webVoicesReady(timeout = 1500) {
   });
 }
 
+// iOS Safari treats page audio (Web Audio and speech) as 'ambient' by default, so the ring/silent
+// switch mutes it. Declaring it as media playback lets narration play like a video does.
+// (Audio Session API, Safari 16.4+; ignored elsewhere.)
+function preferPlaybackAudio() {
+  try { if (navigator.audioSession && navigator.audioSession.type !== 'playback') navigator.audioSession.type = 'playback'; } catch {}
+}
+
 // ---------- the narrator ----------
 class Speech {
   constructor() {
@@ -102,12 +109,17 @@ class Speech {
 
   /** Call inside a tap/click that will lead to speech later (e.g. starting the tour):
    *  browsers — iOS Safari especially — only allow audio that starts from a user gesture. */
-  unlock() {
+  unlock(phrase = '') {
     this._ensureAudio();
     const ss = globalThis.speechSynthesis;
-    if ((this.mode === 'webspeech' || this.engine === 'webspeech') && ss && !this._unlocked) {
-      try { const u = new SpeechSynthesisUtterance(' '); u.volume = 0; ss.speak(u); } catch {}
-      this._unlocked = true;
+    if ((this.mode === 'webspeech' || this.engine === 'webspeech') && ss && !this.speaking) {
+      try {
+        const u = new SpeechSynthesisUtterance(phrase || ' ');
+        const voice = pickWebVoice();
+        if (voice) { u.voice = voice; u.lang = voice.lang; }
+        if (!phrase) u.volume = 0;
+        ss.speak(u);
+      } catch {}
     }
   }
   get paused() { return !!this._session?.paused; }
@@ -204,6 +216,7 @@ class Speech {
   }
 
   _ensureAudio() {
+    preferPlaybackAudio();
     if (this.mode === 'webspeech' || this.engine === 'webspeech') return;
     const AC = globalThis.AudioContext || globalThis.webkitAudioContext;
     if (!AC) return;
@@ -224,15 +237,24 @@ class Speech {
     this._session = s;
     if (!chunks.length) return Promise.resolve();
 
-    const run = (async () => {
-      if (!this._load) this.preload();
-      if (this.state !== 'loading') this._set('speaking');
-      await this._load;
-      if (s.cancelled) return;
-      if (this.state !== 'speaking') this._set('speaking');
-      if (this.engine === 'kokoro' && this._ctx) await this._speakKokoro(chunks, s);
-      else await this._speakWeb(chunks, s);
-    })();
+    // Device voice (speechSynthesis): iOS Safari only plays speech that starts *synchronously*
+    // inside the tap, so nothing may be awaited before the first speak() on this path.
+    const webNow = this.mode === 'webspeech' || this.engine === 'webspeech';
+    const run = webNow
+      ? (async () => {
+        if (!this._load) this.preload();
+        this._set('speaking');
+        await this._speakWeb(chunks, s);
+      })()
+      : (async () => {
+        if (!this._load) this.preload();
+        if (this.state !== 'loading') this._set('speaking');
+        await this._load;
+        if (s.cancelled) return;
+        if (this.state !== 'speaking') this._set('speaking');
+        if (this.engine === 'kokoro' && this._ctx) await this._speakKokoro(chunks, s);
+        else await this._speakWeb(chunks, s);
+      })();
 
     return Promise.race([run, s.stopped]).finally(() => {
       if (this._session === s) {
@@ -290,7 +312,11 @@ class Speech {
     s.sources.length = 0;
     this._worker?.postMessage({ type: 'cancel' });
     for (const [id, r] of this._pending) if (id.startsWith(`${s.id}:`)) { this._pending.delete(id); r(null); }
-    globalThis.speechSynthesis?.cancel();
+    const ss = globalThis.speechSynthesis;
+    if (ss && (ss.speaking || ss.pending)) {
+      ss.cancel();
+      this._cancelledAt = performance.now();
+    }
     s.onStop();
     if (this._load && this.engine === null) this._set('loading', { message: 'Loading voice model…' });
     else this._set('ready');
@@ -358,11 +384,15 @@ class Speech {
       this._set('error', { message: 'No speech engine available in this browser' });
       throw new Error('speechSynthesis unavailable');
     }
-    await webVoicesReady();
+    if (!ss.getVoices().length) await webVoicesReady(); // usually already loaded (always on iOS)
+    if (s.cancelled) return;
+    // WebKit silently drops a speak() issued right after cancel(); give it a moment.
+    // (Only happens when replacing a narration, by which time speech is already unlocked.)
+    const sinceCancel = performance.now() - (this._cancelledAt ?? -1e9);
+    if (sinceCancel < 150) await new Promise((r) => setTimeout(r, 150 - sinceCancel));
     if (s.cancelled) return;
     const voice = pickWebVoice();
     this.info.webVoice = voice ? `${voice.name} (${voice.lang})` : 'default';
-    ss.cancel();
     for (let i = 0; i < chunks.length; i++) {
       if (s.cancelled) return;
       // One utterance per sentence: avoids Chrome's ~15 s utterance cut-off and makes stop() instant.
@@ -383,7 +413,8 @@ class Speech {
           if (!s.paused) for (const c of cues) s.timers.push(setTimeout(() => this._fireCue(s, c), Math.max(0, (c.rel * est - c.lead) * 1000)));
         };
         u.onboundary = (e) => { for (const c of cues) if (e.charIndex >= c.relChars - 12) this._fireCue(s, c); };
-        u.onend = u.onerror = () => { clearInterval(guard); resolve(); };
+        u.onend = () => { clearInterval(guard); resolve(); };
+        u.onerror = (e) => { this._lastError = `${e.error || 'error'} (sentence ${base + i + 1})`; clearInterval(guard); resolve(); };
         s.stopped.then(() => { clearInterval(guard); resolve(); });
         ss.speak(u);
       });
@@ -392,4 +423,25 @@ class Speech {
 }
 
 export const speech = new Speech();
+
+// ?debug=speech — a small live readout of what the speech engine is doing (for phones, where
+// there's no console): engine, state, speechSynthesis flags, voices, and the last error.
+if (params.get('debug') === 'speech' && globalThis.document) {
+  const box = document.createElement('pre');
+  box.style.cssText = 'position:fixed;left:8px;bottom:120px;z-index:999;margin:0;padding:8px 10px;font:12px/1.35 ui-monospace,monospace;color:#cfe;background:rgba(0,0,0,.8);border:1px solid #456;border-radius:8px;pointer-events:none;white-space:pre';
+  const add = () => document.body.appendChild(box);
+  if (document.body) add(); else addEventListener('DOMContentLoaded', add);
+  let started = 0;
+  const origSpeak = globalThis.speechSynthesis?.speak?.bind(globalThis.speechSynthesis);
+  if (origSpeak) globalThis.speechSynthesis.speak = (u) => { u.addEventListener('start', () => { started++; }); return origSpeak(u); };
+  setInterval(() => {
+    const ss = globalThis.speechSynthesis;
+    box.textContent = [
+      `engine ${speech.engine || '-'}  mode ${speech.mode}  state ${speech.state}`,
+      `synth speaking ${ss?.speaking}  pending ${ss?.pending}  paused ${ss?.paused}`,
+      `voices ${ss?.getVoices().length ?? 'n/a'}  utterances started ${started}`,
+      `last error ${speech._lastError || '-'}`,
+    ].join('\n');
+  }, 250);
+}
 export default speech;
