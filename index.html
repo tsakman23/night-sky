@@ -2,11 +2,24 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#02040a" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="Night Sky" />
+  <link rel="manifest" href="manifest.webmanifest" />
+  <link rel="icon" href="icon.svg" type="image/svg+xml" />
+  <link rel="apple-touch-icon" href="icon-180.png" />
   <title>Night Sky</title>
-  <link rel="stylesheet" href="style.css?v=7" />
+  <link rel="stylesheet" href="style.css?v=8" />
 </head>
 <body>
+  <div id="loading" class="loading" role="status" aria-live="polite">
+    <div class="loading-orbit" aria-hidden="true"><span></span><span></span><span></span></div>
+    <div id="loading-text" class="loading-text">Finding your sky…</div>
+    <div id="loading-sub" class="loading-sub"></div>
+  </div>
   <canvas id="sky" aria-label="The night sky above your location"></canvas>
   <div id="labels" aria-hidden="true"></div>
 
@@ -15,10 +28,19 @@
     <dl class="meta">
       <div class="meta-item"><dt>Time zone</dt><dd id="meta-timezone">—</dd></div>
       <div class="meta-item"><dt>Date &amp; time</dt><dd id="meta-time">—</dd></div>
-      <div class="meta-item"><dt>Location</dt><dd id="meta-location">Locating…</dd></div>
+      <div class="meta-item meta-loc"><dt>Location</dt><dd>
+        <button id="location-btn" type="button" class="loc-btn" title="Change location" aria-haspopup="dialog">
+          <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 18s-5.5-5.2-5.5-9.3a5.5 5.5 0 0 1 11 0C15.5 12.8 10 18 10 18z" fill="none" stroke="currentColor" stroke-width="1.6"/><circle cx="10" cy="8.6" r="1.9" fill="currentColor"/></svg>
+          <span id="meta-location">Locating…</span>
+          <svg class="chev" viewBox="0 0 20 20" aria-hidden="true"><path d="M6 8l4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+        </button>
+      </dd></div>
       <div class="meta-item"><dt>Sun</dt><dd id="meta-sun">—</dd></div>
     </dl>
     <div class="top-actions">
+      <button id="search-toggle" type="button" class="action icon search-toggle" aria-label="Search">
+        <svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="8.5" cy="8.5" r="5.5" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M13 13l4.5 4.5" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>
+      </button>
       <div class="search">
         <svg class="search-icon" viewBox="0 0 20 20" aria-hidden="true"><circle cx="8.5" cy="8.5" r="5.5" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M13 13l4.5 4.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
         <input id="search" type="search" placeholder="Search constellations &amp; stars" autocomplete="off" spellcheck="false" aria-label="Search constellations and stars" aria-controls="search-results" />
@@ -51,8 +73,32 @@
   </div>
 
   <div id="tooltip" role="tooltip" hidden></div>
+  <div id="peek" hidden>
+    <div class="peek-main"><div id="peek-name" class="tt-name"></div><div id="peek-sub" class="tt-sub"></div><div id="peek-star" class="tt-star"></div></div>
+    <button id="peek-open" type="button">Details ›</button>
+  </div>
+
+  <div id="loc-picker" role="dialog" aria-modal="true" aria-labelledby="loc-title" hidden>
+    <div class="lp-card">
+      <div class="lp-head">
+        <h2 id="loc-title">See the sky from…</h2>
+        <button id="loc-close" type="button" class="lp-close" aria-label="Close">×</button>
+      </div>
+      <div class="lp-search">
+        <svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="8.5" cy="8.5" r="5.5" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M13 13l4.5 4.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+        <input id="loc-search" type="search" placeholder="Search for a city or place" autocomplete="off" spellcheck="false" aria-controls="loc-results" />
+      </div>
+      <button id="loc-mine" type="button" class="lp-mine">
+        <svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="3" fill="currentColor"/><circle cx="10" cy="10" r="6.5" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M10 1.5v3M10 15.5v3M1.5 10h3M15.5 10h3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+        Use my current location
+      </button>
+      <ul id="loc-results" role="listbox"></ul>
+      <div id="loc-note" class="lp-note"></div>
+    </div>
+  </div>
 
   <aside id="panel" aria-hidden="true">
+    <div id="sheet-handle" class="sheet-handle" aria-hidden="true"><span></span></div>
     <button id="panel-close" type="button" aria-label="Close">×</button>
     <div id="panel-content"></div>
   </aside>
@@ -72,6 +118,6 @@
     </div>
   </footer>
 
-  <script type="module" src="main.js?v=7"></script>
+  <script type="module" src="main.js?v=8"></script>
 </body>
 </html>

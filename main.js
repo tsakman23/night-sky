@@ -47,6 +47,23 @@ const els = {
   tourRestart: $('#tour-restart'),
   tourStop: $('#tour-stop'),
   voiceStatus: $('#voice-status'),
+  loading: $('#loading'),
+  loadingText: $('#loading-text'),
+  loadingSub: $('#loading-sub'),
+  locBtn: $('#location-btn'),
+  locPicker: $('#loc-picker'),
+  locSearch: $('#loc-search'),
+  locResults: $('#loc-results'),
+  locClose: $('#loc-close'),
+  locMine: $('#loc-mine'),
+  locNote: $('#loc-note'),
+  peek: $('#peek'),
+  peekName: $('#peek-name'),
+  peekSub: $('#peek-sub'),
+  peekStar: $('#peek-star'),
+  peekOpen: $('#peek-open'),
+  searchToggle: $('#search-toggle'),
+  sheetHandle: $('#sheet-handle'),
 };
 
 // ---------------------------------------------------------------------------
@@ -62,7 +79,7 @@ const state = {
   offsetMin: 0, // time shift the sky is drawn for (eases toward offsetTarget)
   offsetTarget: 0, // time shift chosen with the slider / wheel, in minutes
   yaw: 180 * DEG, // azimuth the camera faces (0 = north, 90° = east)
-  pitch: 32 * DEG, // altitude the camera faces
+  pitch: (matchMedia('(max-width: 720px)').matches ? 26 : 32) * DEG, // altitude the camera faces
   fov: 80,
   userMoved: false,
   pointer: { x: 0, y: 0, inside: false, down: false, moved: 0, lastX: 0, lastY: 0 },
@@ -77,6 +94,8 @@ const state = {
   anim: null, // camera slew in progress
   markStar: null, // star picked from search
   pointing: null, // { star, c, moving } while the narrator points at a star
+  peek: null, // { cst, star } shown in the tap bubble on touch screens
+  manualLocation: false, // the user picked a place; ignore late geolocation results
 };
 
 let stars = [];
@@ -649,9 +668,9 @@ function updateScreenPositions() {
 }
 
 // What is under the cursor: a bright star, a constellation line, or the area a figure spans.
-function pick(px, py) {
+function pick(px, py, scale = 1) {
   let star = null;
-  let bestStar = 10;
+  let bestStar = 10 * scale;
   for (const s of brightStars) {
     horizonVec(s.vec, _h);
     if (_h.y <= 0) continue;
@@ -663,7 +682,7 @@ function pick(px, py) {
   if (star) return { cst: constByAbbr.get(star.con) || null, star };
 
   let best = null;
-  let bestD = 12;
+  let bestD = 12 * scale;
   for (const c of consts) {
     for (const [a, b] of c.segs) {
       const pa = screenPos.get(a.hip);
@@ -696,13 +715,13 @@ const skyTime = () => Date.now() + state.offsetMin * 60000;
 function updateHeader() {
   const now = Date.now();
   els.tz.textContent = state.timeZone;
-  els.time.textContent = new Intl.DateTimeFormat('en-GB', {
-    timeZone: state.timeZone, weekday: 'short', day: 'numeric', month: 'short', year: 'numeric',
-    hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
-  }).format(new Date(now));
-  els.loc.textContent = state.locKnown
-    ? `${state.place} · ${fmtLatLon(state.lat, state.lon)}`
-    : `${state.place} — allow location access for your own sky`;
+  els.time.textContent = new Intl.DateTimeFormat('en-GB', isCompact()
+    ? { timeZone: state.timeZone, weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', hour12: false }
+    : { timeZone: state.timeZone, weekday: 'short', day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false },
+  ).format(new Date(now)) + (state.manualLocation && !isCompact() ? ' (local time)' : '');
+  els.loc.textContent = isCompact()
+    ? state.place
+    : state.locKnown ? `${state.place} · ${fmtLatLon(state.lat, state.lon)}` : `${state.place} — click to choose a location`;
 
   const t = skyTime();
   const sun = sunRaDec(t);
@@ -762,6 +781,7 @@ async function ipLocation() {
     const j = await r.json();
     if (typeof j.latitude !== 'number') return false;
     const place = [j.city, j.country_name].filter(Boolean).join(', ') || 'Approximate location';
+    if (state.manualLocation) return false;
     setLocation(j.latitude, j.longitude, `${place} (approx.)`, true);
     return true;
   } catch {
@@ -777,10 +797,11 @@ function initLocation() {
   }
   navigator.geolocation.getCurrentPosition(
     async (pos) => {
+      if (state.manualLocation) return;
       const { latitude, longitude } = pos.coords;
       setLocation(latitude, longitude, 'Your location', true);
       const name = await reverseGeocode(latitude, longitude);
-      if (name) setLocation(latitude, longitude, name, true);
+      if (name && !state.manualLocation) setLocation(latitude, longitude, name, true);
     },
     () => { ipLocation(); },
     { enableHighAccuracy: false, timeout: 10000, maximumAge: 600000 },
@@ -837,20 +858,41 @@ function refreshLineStyles() {
 }
 
 function onPointerDown(e) {
-  if (e.button !== 0) return;
+  if (e.pointerType === 'mouse' && e.button !== 0) return;
+  lastPointerType = e.pointerType;
   interruptTour();
   cancelAnim();
+  activeTouches.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  els.canvas.setPointerCapture(e.pointerId);
   const p = state.pointer;
+  if (activeTouches.size === 2) {
+    // Second finger: pinch to zoom (and never treat this gesture as a tap).
+    const [a, b] = [...activeTouches.values()];
+    pinch = { d0: Math.hypot(a.x - b.x, a.y - b.y) || 1, fov0: state.fov };
+    p.moved = 999;
+    hidePeek();
+    return;
+  }
+  if (activeTouches.size > 2) return;
   p.down = true;
   p.moved = 0;
-  p.lastX = e.clientX;
-  p.lastY = e.clientY;
-  els.canvas.setPointerCapture(e.pointerId);
+  p.lastX = p.x = e.clientX;
+  p.lastY = p.y = e.clientY;
+  downAt = performance.now();
   els.canvas.classList.add('dragging');
 }
 
 function onPointerMove(e) {
   lastInput = performance.now();
+  lastPointerType = e.pointerType;
+  if (activeTouches.has(e.pointerId)) activeTouches.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  if (pinch && activeTouches.size >= 2) {
+    const [a, b] = [...activeTouches.values()];
+    const d = Math.hypot(a.x - b.x, a.y - b.y) || 1;
+    state.fov = THREE.MathUtils.clamp((pinch.fov0 * pinch.d0) / d, 18, 110);
+    state.userMoved = true;
+    return;
+  }
   const p = state.pointer;
   if (Math.abs(e.clientX - p.x) + Math.abs(e.clientY - p.y) > 2) state.edgeArmed = true;
   p.x = e.clientX;
@@ -862,28 +904,36 @@ function onPointerMove(e) {
     p.lastX = e.clientX;
     p.lastY = e.clientY;
     p.moved += Math.abs(dx) + Math.abs(dy);
-    // "Grab the sky": the point under the cursor follows the cursor.
+    // "Grab the sky": the point under the finger/cursor follows it.
     const radPerPx = (state.fov * DEG) / H;
     state.yaw -= dx * radPerPx;
     state.pitch = clampPitch(state.pitch + dy * radPerPx);
     state.userMoved = true;
     els.tooltip.hidden = true;
+    if (p.moved > 12) hidePeek();
   }
 }
 
 function onPointerUp(e) {
+  activeTouches.delete(e.pointerId);
+  if (els.canvas.hasPointerCapture(e.pointerId)) els.canvas.releasePointerCapture(e.pointerId);
   const p = state.pointer;
+  if (pinch) {
+    if (activeTouches.size < 2) {
+      pinch = null;
+      const rest = [...activeTouches.values()][0];
+      if (rest) { p.lastX = rest.x; p.lastY = rest.y; } // keep dragging with the remaining finger
+      else { p.down = false; els.canvas.classList.remove('dragging'); }
+    }
+    return;
+  }
   if (!p.down) return;
   p.down = false;
   els.canvas.classList.remove('dragging');
-  if (els.canvas.hasPointerCapture(e.pointerId)) els.canvas.releasePointerCapture(e.pointerId);
-  if (p.moved < 5 && !tour.active) {
-    // A click, not a drag.
-    updateScreenPositions();
-    const hit = pick(e.clientX, e.clientY);
-    if (hit.cst) openPanel(hit.cst, hit.star);
-    else closePanel();
-  }
+  if (e.type === 'pointercancel') return;
+  const touch = e.pointerType !== 'mouse';
+  const isTap = p.moved < (touch ? 12 : 5) && (!touch || performance.now() - downAt < 600);
+  if (isTap && !tour.active) handleTap(e.clientX, e.clientY, touch);
 }
 
 function onWheel(e) {
@@ -899,7 +949,12 @@ function onKey(e) {
   lastInput = performance.now();
   const step = 4 * DEG * (state.fov / 80);
   if (e.key.startsWith('Arrow') || e.key === '+' || e.key === '=' || e.key === '-') { interruptTour(); cancelAnim(); }
-  if (e.key === 'Escape') { if (tour.active) stopTour(); else closePanel(); }
+  if (e.key === 'Escape') {
+    if (!els.locPicker.hidden) closeLocPicker();
+    else if (state.peek) hidePeek();
+    else if (tour.active) stopTour();
+    else closePanel();
+  }
   else if (e.key === 'ArrowLeft') state.yaw -= step;
   else if (e.key === 'ArrowRight') state.yaw += step;
   else if (e.key === 'ArrowUp') state.pitch = clampPitch(state.pitch + step);
@@ -914,6 +969,7 @@ function onKey(e) {
 function edgePan(dt) {
   const p = state.pointer;
   state.edgePanning = false;
+  if (lastPointerType !== 'mouse') return;
   if (!p.inside || p.down || (tour.active && !tour.paused) || state.anim) return;
   const top = els.topbar.getBoundingClientRect().bottom;
   const bottom = els.controls.getBoundingClientRect().top;
@@ -954,11 +1010,10 @@ function wireControls() {
   els.canvas.addEventListener('pointermove', onPointerMove);
   els.canvas.addEventListener('pointerup', onPointerUp);
   els.canvas.addEventListener('pointercancel', onPointerUp);
-  els.canvas.addEventListener('pointerleave', () => {
-    if (!state.pointer.down) {
-      state.pointer.inside = false;
-      setHover(null);
-    }
+  els.canvas.addEventListener('pointerleave', (e) => {
+    if (state.pointer.down) return;
+    state.pointer.inside = false;
+    if (e.pointerType === 'mouse') setHover(null);
   });
   els.canvas.addEventListener('wheel', onWheel, { passive: false });
   window.addEventListener('keydown', onKey);
@@ -1304,10 +1359,16 @@ const wrapAngle = (a) => Math.atan2(Math.sin(a), Math.cos(a));
 function slewTo(c, { ms = skyTime(), panel = true, dur = 1700 } = {}) {
   const { alt, az } = altAzAt(c.center, ms);
   const extent = Math.max(...c.figure.map((s) => s.vec.angleTo(c.center))) / DEG;
-  const fov = THREE.MathUtils.clamp(extent * 2.7, 38, 95);
-  const pitch = THREE.MathUtils.clamp(alt < 0 ? 12 : alt, -5, 80) * DEG;
+  let fov = THREE.MathUtils.clamp(extent * 2.7, 38, 95);
+  let pitch = THREE.MathUtils.clamp(alt < 0 ? 12 : alt, -5, 80) * DEG;
   let yaw = az * DEG;
-  if (panel && W > 900) {
+  if (panel && isCompact()) {
+    // Bottom sheet covers ~58% of a phone screen: fit the figure into the strip above it.
+    const visible = Math.max(0.3, 1 - 0.58);
+    fov = THREE.MathUtils.clamp((extent * 2.5) / visible, 50, 110);
+    const f = H / 2 / Math.tan((fov * DEG) / 2);
+    pitch = clampPitch(pitch - Math.atan((H * 0.58) / 2 / f));
+  } else if (panel && W > 900) {
     // Keep the figure centred in the part of the sky the panel doesn't cover.
     const panelW = Math.min(400, W);
     const f = H / 2 / Math.tan((fov * DEG) / 2);
@@ -1433,6 +1494,7 @@ function chooseResult(e) {
   els.search.value = e.label;
   els.results.hidden = true;
   els.search.blur();
+  document.body.classList.remove('searching');
   stopTour();
   focusOn(e.c, e.s);
 }
@@ -1456,7 +1518,7 @@ function wireSearch() {
     stopTour();
     if (els.search.value.trim()) { searchResults = runSearch(els.search.value); renderResults(); }
   });
-  els.search.addEventListener('blur', () => setTimeout(() => { els.results.hidden = true; }, 120));
+  els.search.addEventListener('blur', () => setTimeout(() => { els.results.hidden = true; document.body.classList.remove('searching'); }, 150));
   els.search.addEventListener('keydown', (e) => {
     if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
       e.preventDefault();
@@ -1699,8 +1761,10 @@ function starOnScreen(star) {
   horizonVec(star.vec, _h);
   if (_h.y <= 0) return null;
   const p = toScreen(_h);
-  const right = els.panel.classList.contains('open') ? els.panel.getBoundingClientRect().left : W;
-  return p && p.x > 8 && p.x < right - 8 && p.y > 8 && p.y < H - 8 ? p : null;
+  const open = els.panel.classList.contains('open');
+  const right = open && !isCompact() ? els.panel.getBoundingClientRect().left : W;
+  const bottom = open && isCompact() ? sheetTop() : H;
+  return p && p.x > 8 && p.x < right - 8 && p.y > 8 && p.y < bottom - 8 ? p : null;
 }
 
 function pointAtStar(star, c, token) {
@@ -1712,7 +1776,7 @@ function pointAtStar(star, c, token) {
     // The narrator's pointer comes in from the panel, next to the Listen button.
     const b = els.panelContent.querySelector('[data-listen]')?.getBoundingClientRect();
     const left = els.panel.classList.contains('open') ? els.panel.getBoundingClientRect().left : W;
-    tour.cursor = { x: left - 36, y: b ? b.top + b.height / 2 : H * 0.3 };
+    tour.cursor = isCompact() ? { x: W / 2, y: sheetTop() - 30 } : { x: left - 36, y: b ? b.top + b.height / 2 : H * 0.3 };
     placeTourCursor();
     els.tourCursor.hidden = false;
   }
@@ -1839,7 +1903,7 @@ async function startTour() {
   const token = ++tour.token;
   const alive = () => token === tour.token;
   document.body.classList.add('touring');
-  els.tourBtn.textContent = '■ Stop tour';
+  els.tourBtn.textContent = isCompact() ? '■ Stop' : '■ Stop tour';
   els.tourBtn.classList.add('on');
   els.results.hidden = true;
   closePanel();
@@ -1954,13 +2018,19 @@ function updateTourBar() {
 function wireExtras() {
   wireSearch();
   wireFullscreen();
-  els.tourBtn.addEventListener('click', startTour);
+  els.tourBtn.addEventListener('click', () => { speech?.unlock?.(); startTour(); });
   els.tourPause.addEventListener('click', toggleTourPause);
   els.tourRestart.addEventListener('click', restartTour);
   els.tourStop.addEventListener('click', stopTour);
   els.toggleVoice.addEventListener('change', () => {
     state.voice = els.toggleVoice.checked;
     if (!state.voice && tour.active) stopNarration();
+  });
+  els.toast.addEventListener('click', (e) => {
+    const b = e.target.closest('[data-tonight]');
+    if (!b) return;
+    setTimeTarget(Number(b.dataset.tonight));
+    els.toast.hidden = true;
   });
   els.panelContent.addEventListener('click', (e) => {
     if (e.target.closest('[data-listen]') && state.selected) narrate(state.selected);
@@ -1991,9 +2061,356 @@ function updateMarker() {
 }
 
 // ---------------------------------------------------------------------------
+// Touch, phones and small screens
+// ---------------------------------------------------------------------------
+const mqCompact = matchMedia('(max-width: 720px)');
+const isCompact = () => mqCompact.matches;
+let lastPointerType = matchMedia('(hover: none)').matches ? 'touch' : 'mouse';
+const activeTouches = new Map(); // pointerId -> { x, y }
+let pinch = null; // { d0, fov0 } while two fingers are down
+let downAt = 0;
+
+const sheetTop = () => (els.panel.classList.contains('open') ? els.panel.getBoundingClientRect().top : H);
+
+// Tap bubble: on touch screens the first tap names a constellation, the second opens it.
+function showPeek(hit, x, y) {
+  state.peek = hit;
+  state.hovered = hit.cst;
+  refreshLineStyles();
+  els.peekName.textContent = hit.cst.name;
+  els.peekSub.textContent = meaningOf(hit.cst) ? `The ${meaningOf(hit.cst)}` : '';
+  els.peekStar.textContent = hit.star ? `★ ${hit.star.name || designation(hit.star, hit.cst)} · mag ${fmtMag(hit.star.mag)}` : '';
+  els.peek.hidden = false;
+  const bw = els.peek.offsetWidth;
+  const bh = els.peek.offsetHeight;
+  const left = THREE.MathUtils.clamp(x - bw / 2, 12, W - bw - 12);
+  let top = y - bh - 26; // above the finger, so it isn't hidden under it
+  if (top < 70) top = y + 30;
+  els.peek.style.left = `${left}px`;
+  els.peek.style.top = `${top}px`;
+}
+
+function hidePeek() {
+  if (!state.peek) return;
+  state.peek = null;
+  els.peek.hidden = true;
+  if (lastPointerType !== 'mouse') {
+    state.hovered = null;
+    refreshLineStyles();
+  }
+}
+
+function handleTap(x, y, touch) {
+  updateScreenPositions();
+  const hit = pick(x, y, touch ? 2.2 : 1);
+  if (!touch) {
+    if (hit.cst) openPanel(hit.cst, hit.star);
+    else closePanel();
+    return;
+  }
+  if (!hit.cst) {
+    hidePeek();
+    closePanel();
+    return;
+  }
+  const again = state.peek && state.peek.cst === hit.cst;
+  if (again || els.panel.classList.contains('open')) {
+    hidePeek();
+    openFromTap(hit.cst, hit.star, y);
+    return;
+  }
+  showPeek(hit, x, y);
+}
+
+// Opening the sheet covers the lower part of a phone screen: lift the figure into view.
+function openFromTap(c, star, tapY) {
+  openPanel(c, star);
+  if (isCompact() && tapY > H * 0.36) slewTo(c, { panel: true, dur: 700 });
+}
+
+// Bottom sheet: drag the handle down to close, up to expand; tap it to toggle.
+function wireSheet() {
+  let startY = 0;
+  let dy = 0;
+  let dragging = false;
+  els.sheetHandle.addEventListener('pointerdown', (e) => {
+    dragging = true;
+    startY = e.clientY;
+    dy = 0;
+    els.sheetHandle.setPointerCapture(e.pointerId);
+    els.panel.classList.add('dragging');
+  });
+  els.sheetHandle.addEventListener('pointermove', (e) => {
+    if (!dragging) return;
+    dy = e.clientY - startY;
+    els.panel.style.transform = dy > 0 ? `translateY(${dy}px)` : '';
+  });
+  const end = () => {
+    if (!dragging) return;
+    dragging = false;
+    els.panel.classList.remove('dragging');
+    els.panel.style.transform = '';
+    if (Math.abs(dy) < 6) els.panel.classList.toggle('expanded');
+    else if (dy > 90) closePanel();
+    else if (dy < -40) els.panel.classList.add('expanded');
+    else if (dy > 30) els.panel.classList.remove('expanded');
+  };
+  els.sheetHandle.addEventListener('pointerup', end);
+  els.sheetHandle.addEventListener('pointercancel', end);
+}
+
+function wireMobile() {
+  wireSheet();
+  els.peekOpen.addEventListener('click', () => {
+    const p = state.peek;
+    if (!p) return;
+    hidePeek();
+    const s = p.star ? starOnScreen(p.star) : figureScreenCentre(p.cst);
+    openFromTap(p.cst, p.star, s ? s.y : H);
+  });
+  els.searchToggle.addEventListener('click', () => {
+    document.body.classList.add('searching');
+    els.search.focus();
+  });
+  const fsOk = document.fullscreenEnabled || document.webkitFullscreenEnabled;
+  if (!fsOk) els.fullscreen.hidden = true; // e.g. iPhone Safari: use "Add to Home Screen" instead
+  mqCompact.addEventListener('change', () => {
+    updateHeader();
+    if (!isCompact()) els.panel.classList.remove('expanded');
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Loading screen
+// ---------------------------------------------------------------------------
+let loadingShownAt = 0;
+function showLoading(text, sub = '') {
+  els.loadingText.textContent = text;
+  els.loadingSub.textContent = sub;
+  els.loading.hidden = false;
+  els.loading.classList.remove('hide');
+  loadingShownAt = performance.now();
+}
+async function hideLoading(minMs = 0) {
+  const left = minMs - (performance.now() - loadingShownAt);
+  if (left > 0) await sleep(left);
+  // wait for a rendered frame of the new sky before revealing it
+  await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+  els.loading.classList.add('hide');
+  setTimeout(() => { if (els.loading.classList.contains('hide')) els.loading.hidden = true; }, 650);
+}
+
+// ---------------------------------------------------------------------------
+// Location picker: see the sky from anywhere
+// ---------------------------------------------------------------------------
+const SUGGESTED_PLACES = [
+  { name: 'Sydney', region: 'Australia', lat: -33.8688, lon: 151.2093, tz: 'Australia/Sydney' },
+  { name: 'Atacama Desert', region: 'San Pedro de Atacama, Chile', lat: -22.9087, lon: -68.1997, tz: 'America/Santiago' },
+  { name: 'Cape Town', region: 'South Africa', lat: -33.9249, lon: 18.4241, tz: 'Africa/Johannesburg' },
+  { name: 'Quito', region: 'Ecuador · on the equator', lat: -0.1807, lon: -78.4678, tz: 'America/Guayaquil' },
+  { name: 'Reykjavík', region: 'Iceland', lat: 64.1466, lon: -21.9426, tz: 'Atlantic/Reykjavik' },
+  { name: 'Mauna Kea', region: 'Hawaii, United States', lat: 19.8207, lon: -155.4681, tz: 'Pacific/Honolulu' },
+  { name: 'Tokyo', region: 'Japan', lat: 35.6762, lon: 139.6503, tz: 'Asia/Tokyo' },
+];
+let locResults = [];
+let locActive = -1;
+let locAbort = null;
+let locTimer = 0;
+
+function validTimeZone(tz) {
+  try {
+    new Intl.DateTimeFormat('en-GB', { timeZone: tz });
+    return tz;
+  } catch {
+    return 'UTC';
+  }
+}
+function tzOffsetLabel(tz) {
+  try {
+    const parts = new Intl.DateTimeFormat('en-GB', { timeZone: tz, timeZoneName: 'shortOffset' }).formatToParts(new Date());
+    return parts.find((p) => p.type === 'timeZoneName')?.value || '';
+  } catch {
+    return '';
+  }
+}
+const localClockAt = (tz) => new Intl.DateTimeFormat('en-GB', { timeZone: validTimeZone(tz), hour: '2-digit', minute: '2-digit', hour12: false }).format(new Date());
+
+function renderLocResults(title) {
+  const items = locResults.map((r, i) => {
+    const hemi = Math.abs(r.lat) < 5 ? 'Both skies' : r.lat < 0 ? '<span class="hemi">Southern sky</span>' : 'Northern sky';
+    return `<li role="option" data-i="${i}" class="${i === locActive ? 'active' : ''}">
+      <div class="lr-main"><div class="lr-name">${escapeHtml(r.name)}</div><div class="lr-sub">${escapeHtml(r.region)}</div></div>
+      <div class="lr-side">${localClockAt(r.tz)} ${escapeHtml(tzOffsetLabel(r.tz))}<br>${hemi}</div>
+    </li>`;
+  }).join('');
+  els.locResults.innerHTML = (title ? `<li class="lr-head">${escapeHtml(title)}</li>` : '') + items;
+}
+
+function showSuggestions() {
+  locResults = SUGGESTED_PLACES;
+  locActive = -1;
+  renderLocResults('Dark-sky and far-away places');
+  els.locNote.textContent = '';
+}
+
+async function searchPlaces(q) {
+  locAbort?.abort();
+  locAbort = new AbortController();
+  els.locNote.textContent = 'Searching…';
+  try {
+    const url = `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(q)}&count=8&language=en&format=json`;
+    const r = await fetch(url, { signal: locAbort.signal });
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const j = await r.json();
+    locResults = (j.results || []).map((p) => ({
+      name: p.name,
+      region: [p.admin1, p.country].filter((x) => x && x !== p.name).join(', '),
+      country: p.country,
+      lat: p.latitude,
+      lon: p.longitude,
+      tz: validTimeZone(p.timezone || 'UTC'),
+    }));
+    const seen = new Set(); // the geocoder sometimes returns the same place twice
+    locResults = locResults.filter((r) => {
+      const k = `${r.name}|${r.region}`;
+      return !seen.has(k) && seen.add(k);
+    });
+    locActive = locResults.length ? 0 : -1;
+    renderLocResults();
+    els.locNote.textContent = locResults.length ? '' : `No places match “${q}”.`;
+  } catch (err) {
+    if (err.name === 'AbortError') return;
+    els.locNote.textContent = 'Place search is unavailable right now (offline?). Try a suggestion.';
+  }
+}
+
+function openLocPicker() {
+  stopTour();
+  hidePeek();
+  els.locPicker.hidden = false;
+  els.locSearch.value = '';
+  showSuggestions();
+  if (lastPointerType === 'mouse') setTimeout(() => els.locSearch.focus(), 30);
+}
+const closeLocPicker = () => { els.locPicker.hidden = true; };
+
+function wireLocPicker() {
+  els.locBtn.addEventListener('click', openLocPicker);
+  els.locClose.addEventListener('click', closeLocPicker);
+  els.locPicker.addEventListener('click', (e) => { if (e.target === els.locPicker) closeLocPicker(); });
+  els.locSearch.addEventListener('input', () => {
+    clearTimeout(locTimer);
+    const q = els.locSearch.value.trim();
+    if (q.length < 2) { showSuggestions(); return; }
+    locTimer = setTimeout(() => searchPlaces(q), 250);
+  });
+  els.locSearch.addEventListener('keydown', (e) => {
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      if (!locResults.length) return;
+      locActive = (locActive + (e.key === 'ArrowDown' ? 1 : -1) + locResults.length) % locResults.length;
+      renderLocResults(els.locSearch.value.trim().length < 2 ? 'Dark-sky and far-away places' : '');
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      const r = locResults[Math.max(0, locActive)];
+      if (r) travelTo(r);
+    } else if (e.key === 'Escape') {
+      closeLocPicker();
+    }
+  });
+  els.locResults.addEventListener('mousedown', (e) => e.preventDefault());
+  els.locResults.addEventListener('click', (e) => {
+    const li = e.target.closest('li[data-i]');
+    if (li) travelTo(locResults[Number(li.dataset.i)]);
+  });
+  els.locMine.addEventListener('click', useMyLocation);
+}
+
+// Switch the whole sky to another place (and its time zone), behind a loading screen.
+async function travelTo(r) {
+  closeLocPicker();
+  stopNarration();
+  closePanel();
+  showLoading(`Travelling to ${r.name}…`, `${r.region ? `${r.region} · ` : ''}${fmtLatLon(r.lat, r.lon)}`);
+  state.manualLocation = true;
+  state.timeZone = validTimeZone(r.tz);
+  setTimeTarget(0);
+  state.offsetMin = 0;
+  setLocation(r.lat, r.lon, r.region ? `${r.name}, ${r.country || r.region.split(', ').pop()}` : r.name, true);
+  resetView();
+  await hideLoading(900);
+  offerTonight(r.name);
+}
+
+function resetView() {
+  cancelAnim();
+  state.yaw = (state.lat >= 0 ? 180 : 0) * DEG; // face the celestial equator
+  state.pitch = (isCompact() ? 26 : 32) * DEG;
+  state.fov = isCompact() ? 75 : 80;
+  state.userMoved = false;
+}
+
+// If it's daytime there, offer to jump to tonight's dark sky.
+function offerTonight(name) {
+  const t0 = Date.now();
+  if (sunAltAt(t0) < DARK_SUN) {
+    showToast(`<strong>${escapeHtml(name)}:</strong> it's night there right now (${fmtClock(t0)} local time).`, 5000);
+    return;
+  }
+  for (let m = 10; m <= 720; m += 10) {
+    if (sunAltAt(t0 + m * 60000) < DARK_SUN) {
+      const at = t0 + (m + 60) * 60000; // an hour into darkness
+      const off = Math.min(720, m + 60);
+      els.toast.innerHTML = `<strong>${escapeHtml(name)}:</strong> it's ${fmtClock(t0)} there and the Sun is up. <button type="button" data-tonight="${off}">Show tonight at ${fmtClock(at)}</button>`;
+      els.toast.hidden = false;
+      clearTimeout(toastTimer);
+      toastTimer = setTimeout(() => { els.toast.hidden = true; }, 12000);
+      return;
+    }
+  }
+  showToast(`<strong>${escapeHtml(name)}:</strong> the Sun doesn't set there in the next 12 hours (midnight sun).`, 7000);
+}
+
+function useMyLocation() {
+  closeLocPicker();
+  showLoading('Finding where you are…', 'Allow location access when your browser asks');
+  const done = async (lat, lon, place) => {
+    state.manualLocation = false;
+    state.timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    setTimeTarget(0);
+    state.offsetMin = 0;
+    setLocation(lat, lon, place, true);
+    resetView();
+    await hideLoading(600);
+  };
+  if (!navigator.geolocation) { ipLocation().then(() => hideLoading(300)); return; }
+  navigator.geolocation.getCurrentPosition(
+    async (pos) => {
+      const { latitude, longitude } = pos.coords;
+      els.loadingText.textContent = 'Looking up the place name…';
+      const name = await reverseGeocode(latitude, longitude);
+      await done(latitude, longitude, name || 'Your location');
+    },
+    async () => {
+      els.loadingSub.textContent = 'Location access was refused — using an approximate location instead';
+      const ok = await ipLocation();
+      if (ok) {
+        state.manualLocation = false;
+        state.timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+        resetView();
+      }
+      await hideLoading(1200);
+    },
+    { enableHighAccuracy: false, timeout: 10000, maximumAge: 600000 },
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Frame loop
 // ---------------------------------------------------------------------------
 function updateLabels() {
+  // Compass labels sit just below the horizon, but never under the footer controls.
+  const footerTop = els.controls.getBoundingClientRect().top + 10;
   for (const c of CARDINALS) {
     const p = toScreen(c.vec);
     if (!p || p.x < -40 || p.x > W + 40 || p.y < -40 || p.y > H + 40) {
@@ -2001,7 +2418,8 @@ function updateLabels() {
       continue;
     }
     c.el.style.display = '';
-    c.el.style.transform = `translate(${p.x.toFixed(1)}px, ${p.y.toFixed(1)}px) translate(-50%, -50%)`;
+    const y = Math.min(p.y, footerTop);
+    c.el.style.transform = `translate(${p.x.toFixed(1)}px, ${y.toFixed(1)}px) translate(-50%, -50%)`;
   }
   for (const c of consts) {
     const active = c === state.hovered || c === state.selected;
@@ -2079,7 +2497,7 @@ function frame(now) {
 
   updateScreenPositions();
   const narratorPointing = state.pointing && now - lastInput >= 1500;
-  if (state.pointer.inside && !state.pointer.down && (!tour.active || tour.paused) && !narratorPointing) setHover(pick(state.pointer.x, state.pointer.y));
+  if (lastPointerType === 'mouse' && state.pointer.inside && !state.pointer.down && (!tour.active || tour.paused) && !narratorPointing) setHover(pick(state.pointer.x, state.pointer.y));
   followPointing(now);
   updateLabels();
   updateMarker();
@@ -2140,6 +2558,8 @@ window.nightSky = {
 
 wireControls();
 wireExtras();
+wireMobile();
+wireLocPicker();
 initLocation();
 loadData()
   .then(() => {
@@ -2150,8 +2570,10 @@ loadData()
     requestAnimationFrame(frame);
     skyReady = true;
     maybePreloadVoice();
+    hideLoading(0);
   })
   .catch((err) => {
     console.error('Night Sky failed to start:', err);
+    showLoading('Could not load the star data', String(err.message || err));
     els.loc.textContent = `Failed to load star data: ${err.message}`;
   });
