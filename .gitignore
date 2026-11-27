@@ -12,3 +12,7 @@ __pycache__/
 # Local logs and scratch
 *.log
 /tmp/
+
+# Vercel project link (local)
+.vercel/
+.vercel

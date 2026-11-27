@@ -7,6 +7,8 @@ is hidden. Hover over a constellation to see its name; click it for a side panel
 with a star chart, the named stars in its figure, when and where to see it, and
 a short description.
 
+**Live:** https://night-sky-nine.vercel.app (open it on your phone; add it to the home screen for full-screen)
+
 ## Run
 
 ```sh
@@ -101,11 +103,17 @@ Debug overrides: `?engine=webspeech|kokoro`, `?ttsdevice=webgpu|wasm`, `?ttsdtyp
 External services at runtime: `api.bigdatacloud.net` (place name for your
 coordinates) and, only if geolocation is refused, `ipapi.co` (approximate location).
 
+## Deploy
+
+Static site, no build step. `vercel.json` adds the COOP/COEP headers (multi-threaded WASM for the
+voice fallback); `.vercelignore` leaves out dev-only files. `vercel deploy --prod` publishes it.
+
 ## Files
 
 - `index.html`, `style.css`, `main.js` — the app (no build step)
 - `vendor/three.module.js`, `vendor/three.core.js` — Three.js 0.187.0
 - `serve.py` — tiny no-cache, cross-origin-isolated static server (`--lan` for phones)
+- `vercel.json`, `.vercelignore` — Vercel deployment config
 - `speech.js`, `tts-worker.js`, `vendor/kokoro/` — in-browser narration voice
 
 ## Roadmap (planned extensions)
