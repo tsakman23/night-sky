@@ -12,6 +12,10 @@ import sys
 class NoCacheHandler(http.server.SimpleHTTPRequestHandler):
     def end_headers(self):
         self.send_header("Cache-Control", "no-store")
+        # Cross-origin isolation: lets the voice model use multi-threaded WebAssembly
+        # (SharedArrayBuffer). Third-party requests (model, geocoding) are CORS fetches, which stay allowed.
+        self.send_header("Cross-Origin-Opener-Policy", "same-origin")
+        self.send_header("Cross-Origin-Embedder-Policy", "require-corp")
         super().end_headers()
 
     def log_message(self, fmt, *args):  # keep the terminal quiet

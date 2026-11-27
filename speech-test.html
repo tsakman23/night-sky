@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Night Sky — speech test</title>
+<style>
+  body { font: 14px system-ui, sans-serif; background: #0b1020; color: #dde; margin: 2rem; max-width: 60rem; }
+  textarea { width: 100%; height: 9rem; background: #141a30; color: #eef; border: 1px solid #334; padding: .5rem; font: inherit; }
+  button { font: inherit; padding: .4rem 1rem; margin: .5rem .5rem .5rem 0; }
+  #status { margin-left: 1rem; color: #9cf; }
+  #log { white-space: pre-wrap; font: 12px ui-monospace, monospace; background: #050810; padding: .75rem; border: 1px solid #223; min-height: 10rem; }
+</style>
+</head>
+<body>
+<h1>Speech test</h1>
+<p>Overrides: <code>?engine=webspeech</code>, <code>?ttsdevice=wasm</code> or <code>?ttsdevice=webgpu</code>.</p>
+<textarea id="text">Orion, the Hunter, is one of the most recognisable constellations in the night sky. Its three belt stars, Alnitak, Alnilam and Mintaka, point down towards Sirius, the brightest star of all. Betelgeuse, a red supergiant, marks the hunter's shoulder, while blue-white Rigel shines at his knee. Below the belt hangs the Orion Nebula, a stellar nursery about thirteen hundred light-years away.</textarea>
+<div>
+  <button id="speak">Speak</button><button id="stop">Stop</button><button id="preload">Preload</button>
+  <span id="status">idle</span>
+</div>
+<div id="log"></div>
+<script type="module">
+  import { speech, splitSentences } from './speech.js';
+  const $ = (id) => document.getElementById(id);
+  const t0 = performance.now();
+  const log = (...a) => {
+    const line = `[${((performance.now() - t0) / 1000).toFixed(2)}s] ` + a.join(' ');
+    $('log').textContent += line + '\n';
+    console.log(line);
+  };
+  window.speech = speech;
+  window.results = { metrics: [], speakResolved: [] };
+  log(`navigator.gpu: ${!!navigator.gpu}  crossOriginIsolated: ${crossOriginIsolated}  mode: ${speech.mode}  device: ${speech.device}`);
+  speech.onchange = (state, info) => {
+    $('status').textContent = `${state} — engine ${info.engine ?? '?'}${info.progress != null ? ` — ${(info.progress * 100).toFixed(0)}%` : ''} ${info.message ?? ''}`;
+    if (state !== 'loading' || info.progress == null || info.progress === 1) log(`state=${state} engine=${info.engine} ${info.message ?? ''}`);
+  };
+  speech.onmetric = (m) => {
+    window.results.metrics.push(m);
+    const f = (n, d = 0) => (n == null ? '-' : n.toFixed(d));
+    if (m.type === 'loaded') log(`LOADED device=${m.device} dtype=${m.dtype} modelLoad=${f(m.loadMs)}ms warmup=${f(m.warmupMs)}ms total=${f(m.totalLoadMs)}ms ${m.deviceFallback?.length ? 'deviceFallback=' + m.deviceFallback.join(';') : ''}`);
+    else if (m.type === 'chunk' && m.engine === 'kokoro') log(`chunk ${m.index}: gen=${f(m.genMs)}ms audio=${f(m.seconds, 2)}s rtf=${f(m.rtf, 3)} rms=${f(m.rms, 4)}${m.firstAudioMs != null ? ` FIRST-AUDIO=${f(m.firstAudioMs)}ms` : ''}  "${m.text.slice(0, 40)}…"`);
+    else if (m.type === 'chunk') log(`webspeech chunk ${m.index} started voice=${m.voice}${m.firstAudioMs != null ? ` FIRST-AUDIO=${f(m.firstAudioMs)}ms` : ''}`);
+    else log(JSON.stringify(m));
+  };
+  $('speak').onclick = () => {
+    log(`speak(): ${splitSentences($('text').value).length} chunks`);
+    const ts = performance.now();
+    speech.speak($('text').value).then(
+      () => { log(`speak() resolved after ${((performance.now() - ts) / 1000).toFixed(2)}s, speaking=${speech.speaking}`); window.results.speakResolved.push(performance.now() - ts); },
+      (e) => log(`speak() REJECTED: ${e.message}`));
+  };
+  $('stop').onclick = () => { log('stop()'); speech.stop(); };
+  $('preload').onclick = () => speech.preload();
+</script>
+</body>
+</html>
