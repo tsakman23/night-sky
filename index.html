@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Night Sky</title>
+  <link rel="stylesheet" href="style.css?v=4" />
+</head>
+<body>
+  <canvas id="sky" aria-label="The night sky above your location"></canvas>
+  <div id="labels" aria-hidden="true"></div>
+
+  <header id="topbar">
+    <div class="brand">Night Sky</div>
+    <dl class="meta">
+      <div class="meta-item"><dt>Time zone</dt><dd id="meta-timezone">—</dd></div>
+      <div class="meta-item"><dt>Date &amp; time</dt><dd id="meta-time">—</dd></div>
+      <div class="meta-item"><dt>Location</dt><dd id="meta-location">Locating…</dd></div>
+      <div class="meta-item"><dt>Sun</dt><dd id="meta-sun">—</dd></div>
+    </dl>
+  </header>
+
+  <div id="tooltip" role="tooltip" hidden></div>
+
+  <aside id="panel" aria-hidden="true">
+    <button id="panel-close" type="button" aria-label="Close">×</button>
+    <div id="panel-content"></div>
+  </aside>
+
+  <footer id="controls">
+    <div class="hint">Drag, or rest the cursor near an edge, to look around · Scroll to zoom · Click a constellation</div>
+    <div class="time-control">
+      <button id="time-now" type="button">Now</button>
+      <input id="time-offset" type="range" min="-720" max="720" step="1" value="0" aria-label="Shift time" />
+      <span id="time-label">Live</span>
+    </div>
+    <div class="toggles">
+      <label><input id="toggle-lines" type="checkbox" checked /> Lines</label>
+      <label><input id="toggle-labels" type="checkbox" /> Names</label>
+    </div>
+  </footer>
+
+  <script type="module" src="main.js?v=4"></script>
+</body>
+</html>
