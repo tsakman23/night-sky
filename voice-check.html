@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>Night Sky — voice check</title>
+<style>
+  body { margin: 0; padding: calc(env(safe-area-inset-top) + 16px) 18px 24px; background: #05070d; color: #e6ebf2; font: 16px/1.45 system-ui, -apple-system, sans-serif; }
+  h1 { font-size: 20px; margin: 0 0 6px; }
+  p { color: #8d99ab; margin: 0 0 16px; font-size: 14px; }
+  button { display: block; width: 100%; margin: 10px 0; padding: 14px; font: inherit; font-weight: 600; color: #fff; background: #1d2b4a; border: 1px solid #3a5288; border-radius: 12px; }
+  pre { white-space: pre-wrap; font: 13px/1.45 ui-monospace, monospace; background: #0c1222; border: 1px solid #243150; border-radius: 10px; padding: 10px; min-height: 140px; }
+</style>
+</head>
+<body>
+  <h1>Voice check</h1>
+  <p>Tap each button and listen. The log shows exactly what the browser did.</p>
+  <button id="plain">1 · Plain speech (browser only)</button>
+  <button id="app">2 · App voice (what Listen uses)</button>
+  <pre id="log"></pre>
+<script type="module">
+  const out = document.getElementById('log');
+  const t0 = performance.now();
+  const log = (m) => { out.textContent += `${((performance.now() - t0) / 1000).toFixed(2)}s  ${m}\n`; };
+  const ss = window.speechSynthesis;
+  log(`speechSynthesis ${ss ? 'available' : 'MISSING'} · voices now ${ss ? ss.getVoices().length : 0}`);
+  log(`audioSession ${navigator.audioSession ? navigator.audioSession.type : 'n/a'} · ${navigator.userAgent.match(/(iPhone|iPad|Mac OS X|Android)[^;)]*/)?.[0] || ''}`);
+  ss?.addEventListener?.('voiceschanged', () => log(`voiceschanged → ${ss.getVoices().length} voices`));
+
+  document.getElementById('plain').addEventListener('click', () => {
+    const u = new SpeechSynthesisUtterance('This is the plain browser voice.');
+    u.plainTest = true;
+    u.onstart = () => log('plain: speech STARTED');
+    u.onend = () => log('plain: speech ended');
+    u.onerror = (e) => log(`plain: ERROR ${e.error}`);
+    ss.speak(u);
+    log(`plain: speak() called · speaking=${ss.speaking} pending=${ss.pending} voices=${ss.getVoices().length}`);
+  });
+
+  const { speech } = await import('./speech.js?engine=webspeech');
+  speech.mode = 'webspeech';
+  speech.onchange = (st, info) => log(`app: state ${st}${info && info.message ? ` (${info.message})` : ''}`);
+  const orig = ss.speak.bind(ss);
+  ss.speak = (u) => {
+    if (u.plainTest) return orig(u);
+    u.addEventListener('start', () => log(`app: sentence STARTED "${u.text.slice(0, 32)}…"`));
+    u.addEventListener('error', (e) => log(`app: ERROR ${e.error}`));
+    log(`app: speak() "${u.text.slice(0, 32)}…" voice=${u.voice ? u.voice.name : 'default'}`);
+    return orig(u);
+  };
+  document.getElementById('app').addEventListener('click', () => {
+    if (speech.speaking) { speech.stop(); log('app: stopped'); return; }
+    speech.speak('This is the app voice. If you can hear this, narration works on this device.')
+      .then(() => log('app: finished'));
+    log(`app: speak() requested · engine=${speech.engine || speech.mode}`);
+  });
+  log('ready — tap a button');
+</script>
+</body>
+</html>

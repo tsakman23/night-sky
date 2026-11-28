@@ -63,6 +63,13 @@ function pickWebVoice() {
   return pool.sort((a, b) => score(b) - score(a))[0] || null;
 }
 
+// iOS returns an empty voice list on the first getVoices() call and fills it in shortly after.
+// Ask early (at module load) so the list is ready by the time someone taps Listen.
+try {
+  globalThis.speechSynthesis?.getVoices();
+  globalThis.speechSynthesis?.addEventListener?.('voiceschanged', () => globalThis.speechSynthesis.getVoices());
+} catch {}
+
 function webVoicesReady(timeout = 1500) {
   const ss = globalThis.speechSynthesis;
   if (!ss || ss.getVoices().length) return Promise.resolve();
@@ -384,8 +391,8 @@ class Speech {
       this._set('error', { message: 'No speech engine available in this browser' });
       throw new Error('speechSynthesis unavailable');
     }
-    if (!ss.getVoices().length) await webVoicesReady(); // usually already loaded (always on iOS)
-    if (s.cancelled) return;
+    // Never wait before the first sentence: on iOS that would leave the tap's user gesture and the
+    // speech would be dropped. If the voice list isn't loaded yet, the system default voice speaks.
     // WebKit silently drops a speak() issued right after cancel(); give it a moment.
     // (Only happens when replacing a narration, by which time speech is already unlocked.)
     const sinceCancel = performance.now() - (this._cancelledAt ?? -1e9);
