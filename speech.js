@@ -17,6 +17,7 @@ const VOICE = 'af_heart';
 const SPEED = 1.0;
 const SENTENCE_GAP = 0.06;     // seconds of extra silence between sentences (Kokoro adds its own tail)
 const CHUNK_TIMEOUT = 30000;   // ms without a generated chunk before giving up on Kokoro
+const FIRST_CHUNK_TIMEOUT = 12000; // the first sentence must arrive sooner, or we fall back
 const MAX_CHUNK = 220;         // chars; longer sentences are split at commas etc. (model limit ≈ 510 tokens)
 const FIRST_CHUNK = 90;        // keep the first chunk short so audio starts sooner
 
@@ -99,7 +100,12 @@ class Speech {
     // Phones/tablets (touch only): use the device's own voice — good on iOS/Android, instant,
     // and no 310 MB model download over mobile data. ?engine=kokoro overrides.
     const touchOnly = globalThis.matchMedia?.('(pointer: coarse)').matches && !globalThis.matchMedia?.('(any-pointer: fine)').matches;
-    if (this.mode === 'auto' && touchOnly) this.mode = 'webspeech';
+    // iPhone/iPad Safari (including iPadOS, which reports a Mac user agent, and devices with a
+    // trackpad or the Simulator's mouse): the in-browser model runs on Safari's WASM, which is
+    // slow to the point of stalling, so use the system voice there too.
+    const nav = globalThis.navigator || {};
+    const appleMobile = /iPhone|iPad|iPod/.test(nav.userAgent || '') || (nav.platform === 'MacIntel' && nav.maxTouchPoints > 1);
+    if (this.mode === 'auto' && (touchOnly || appleMobile)) this.mode = 'webspeech';
     this.device = params.get('ttsdevice') || 'auto'; // 'auto' | 'webgpu' | 'wasm'
     this.dtype = params.get('ttsdtype') || null;    // override, e.g. 'fp16'
     this.voice = VOICE;
@@ -248,6 +254,11 @@ class Speech {
     // Device voice (speechSynthesis): iOS Safari only plays speech that starts *synchronously*
     // inside the tap, so nothing may be awaited before the first speak() on this path.
     const webNow = this.mode === 'webspeech' || this.engine === 'webspeech';
+    // On the model path, also unlock the system voice inside this tap (a silent utterance), so a
+    // later fallback to it is allowed to play on browsers that gate speech behind a gesture.
+    if (!webNow && globalThis.speechSynthesis && !this._webUnlocked) {
+      try { const u = new SpeechSynthesisUtterance(' '); u.volume = 0; globalThis.speechSynthesis.speak(u); this._webUnlocked = true; } catch {}
+    }
     const run = webNow
       ? (async () => {
         if (!this._load) this.preload();
@@ -355,7 +366,7 @@ class Speech {
     }
     for (let i = 0; i < chunks.length; i++) {
       let timer;
-      const m = await Promise.race([reqs[i], new Promise((r) => { timer = setTimeout(() => r({ type: 'timeout' }), CHUNK_TIMEOUT); })]);
+      const m = await Promise.race([reqs[i], new Promise((r) => { timer = setTimeout(() => r({ type: 'timeout' }), i === 0 ? FIRST_CHUNK_TIMEOUT : CHUNK_TIMEOUT); })]);
       clearTimeout(timer);
       if (s.cancelled || !m) return;
       if (m.type === 'timeout' || (m.type === 'gen-error' && !this._worker)) {
