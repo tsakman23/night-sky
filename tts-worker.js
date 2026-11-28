@@ -12,22 +12,14 @@
 //   { type: 'audio', id, samples: Float32Array, sampleRate, genMs, rms, seconds }
 //   { type: 'gen-error', id, message }
 
-import { KokoroTTS, env } from './vendor/kokoro/kokoro.web.js';
+import { KokoroTTS } from './vendor/kokoro/kokoro.web.js';
 
 const MODEL_ID = 'onnx-community/Kokoro-82M-v1.0-ONNX';
 const DTYPE = { webgpu: 'fp32', wasm: 'q8' };
 
-// Hardware-aware WASM: multi-threaded inference needs SharedArrayBuffer, which browsers only
-// allow on cross-origin-isolated pages (serve.py sends COOP/COEP). Leave a couple of cores
-// for rendering and the audio thread; more than ~8 threads stops helping for an 82M model.
-let threadOverride = null; // ?ttsthreads=N from the page, for diagnosis
-function configureWasm() {
-  const wasm = env?.backends?.onnx?.wasm;
-  const cores = self.navigator?.hardwareConcurrency || 4;
-  const threads = threadOverride ?? (self.crossOriginIsolated ? Math.max(1, Math.min(8, cores - 2)) : 1);
-  if (wasm) wasm.numThreads = threads;
-  return threads;
-}
+// Note: this bundle's exported `env` only has `wasmPaths`; ONNX Runtime's own settings (threads)
+// aren't reachable through it, so ORT's defaults apply (it can use threads when the page is
+// cross-origin isolated, which serve.py and vercel.json enable).
 
 let tts = null;
 let loading = null;
@@ -64,13 +56,12 @@ function rmsOf(a) {
 
 async function tryLoad(device, dtype, voice) {
   const t0 = performance.now();
-  const threads = device === 'wasm' ? configureWasm() : 0;
   const model = await KokoroTTS.from_pretrained(MODEL_ID, {
     dtype, device, progress_callback: progressReporter(),
   });
   const loadMs = performance.now() - t0;
   // WASM output is reliable; skip the warm-up there (it would only delay the first sentence).
-  if (device === 'wasm') return { model, loadMs, warmupMs: 0, threads };
+  if (device === 'wasm') return { model, loadMs, warmupMs: 0 };
   // Warm up (compiles WebGPU shaders / WASM kernels) and prove the device yields real audio:
   // some GPU drivers run the fp32 graph but return NaN or silence.
   postMessage({ type: 'progress', progress: 1, message: 'Warming up voice…' });
@@ -78,11 +69,10 @@ async function tryLoad(device, dtype, voice) {
   const out = await model.generate('Hello.', { voice, speed: 1 });
   const rms = rmsOf(out.audio);
   if (!(rms > 0.005) || !Number.isFinite(rms)) throw new Error(`${device} produced silent audio (rms ${rms})`);
-  return { model, loadMs, warmupMs: performance.now() - t1, threads };
+  return { model, loadMs, warmupMs: performance.now() - t1 };
 }
 
-async function load({ device = 'auto', dtype = null, voice = 'af_heart', threads = null } = {}) {
-  threadOverride = threads;
+async function load({ device = 'auto', dtype = null, voice = 'af_heart' } = {}) {
   const order = device === 'auto'
     ? (self.navigator?.gpu && (await navigator.gpu.requestAdapter({ powerPreference: 'high-performance' }).catch(() => null)) ? ['webgpu', 'wasm'] : ['wasm'])
     : [device];
@@ -92,7 +82,7 @@ async function load({ device = 'auto', dtype = null, voice = 'af_heart', threads
       const dt = dtype || DTYPE[d];
       const r = await tryLoad(d, dt, voice);
       tts = r.model;
-      postMessage({ type: 'loaded', device: d, dtype: dt, loadMs: r.loadMs, warmupMs: r.warmupMs, threads: r.threads, isolated: !!self.crossOriginIsolated, fallbackReasons: errors });
+      postMessage({ type: 'loaded', device: d, dtype: dt, loadMs: r.loadMs, warmupMs: r.warmupMs, isolated: !!self.crossOriginIsolated, fallbackReasons: errors });
       pump(); // anything queued while loading
       return;
     } catch (e) {

@@ -108,7 +108,6 @@ class Speech {
     if (this.mode === 'auto' && (touchOnly || appleMobile)) this.mode = 'webspeech';
     this.device = params.get('ttsdevice') || 'auto'; // 'auto' | 'webgpu' | 'wasm'
     this.dtype = params.get('ttsdtype') || null;    // override, e.g. 'fp16'
-    this.threads = params.get('ttsthreads') ? Number(params.get('ttsthreads')) : null; // override WASM threads
     this.voice = VOICE;
     this.speed = SPEED;
     this._worker = null;
@@ -212,7 +211,7 @@ class Speech {
           if (!this.speaking) this._set('loading', { progress: m.progress, message: m.message });
         } else if (m.type === 'loaded') {
           this.engine = 'kokoro';
-          Object.assign(this.info, { device: m.device, dtype: m.dtype, threads: m.threads, isolated: m.isolated, loadMs: m.loadMs, warmupMs: m.warmupMs,
+          Object.assign(this.info, { device: m.device, dtype: m.dtype, isolated: m.isolated, loadMs: m.loadMs, warmupMs: m.warmupMs,
             totalLoadMs: performance.now() - t0, deviceFallback: m.fallbackReasons });
           this._metric({ type: 'loaded', ...this.info });
           if (!this._session) this._set('ready', { message: `Voice ready (${m.device})` });
@@ -225,7 +224,7 @@ class Speech {
         }
       };
       this._set('loading', { progress: 0, message: 'Loading voice model…' });
-      worker.postMessage({ type: 'load', device: this.device, dtype: this.dtype, voice: this.voice, threads: this.threads });
+      worker.postMessage({ type: 'load', device: this.device, dtype: this.dtype, voice: this.voice });
     });
     return this._load;
   }

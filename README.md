@@ -69,12 +69,18 @@ First load downloads the model from Hugging Face and caches it in the browser:
 | Hardware path | Model | Download | Warm start → first word | Speed (this M5 Pro) |
 |---|---|---|---|---|
 | WebGPU (default when available) | fp32 | 310 MB | ~0.9 s | ~0.08× real time |
-| WASM, multi-threaded (no WebGPU) | q8 | 88 MB | ~6.8 s (buffers a sentence ahead) | ~0.8–0.9× real time, 8 threads |
+| WASM (no WebGPU) | q8 | 88 MB | ~6.8 s (buffers a sentence ahead) | ~0.8–0.9× real time (Chrome) |
 | Fallback | browser `speechSynthesis` | none | instant | — |
 
 `speech.speak(text, { cues })` fires callbacks just before given character positions are spoken
 (exact on the Kokoro audio clock; word-boundary events on the browser voice) — used to point at
 stars. `speech.pause()` / `resume()` suspend the audio clock, so cues wait too.
+
+**iPhone / iPad:** narration uses the system voice. Kokoro's text-to-phoneme step (eSpeak-NG
+compiled to WASM, the `phonemizer` package) never returns in iOS Safari: a bare
+`phonemize('Orion, the Hunter.')` times out after 60 s on iOS 26.5 (Simulator) with or without
+cross-origin isolation, versus 45 ms in desktop Chrome. The neural network itself works there
+(1.85 s of audio in 2.5 s on WASM when given phonemes directly).
 
 Debug overrides: `?engine=webspeech|kokoro`, `?ttsdevice=webgpu|wasm`, `?ttsdtype=…`; `speech-test.html` logs timings.
 
@@ -86,7 +92,7 @@ Debug overrides: `?engine=webspeech|kokoro`, `?ttsdevice=webgpu|wasm`, `?ttsdtyp
   GPU/CPU for the voice model.
 - Adaptive resolution: drops the pixel ratio in 0.25 steps if the frame rate falls under ~40 fps while moving.
 - Audio uses `latencyHint: 'playback'` (larger buffers) so speech doesn't crackle when the CPU is busy.
-- `serve.py` sends COOP/COEP headers (cross-origin isolation) so WASM inference can use threads.
+- `serve.py` / `vercel.json` send COOP/COEP (cross-origin isolation), which lets ONNX Runtime's WASM backend use threads by default.
 
 ## Data
 
