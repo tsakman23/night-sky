@@ -110,6 +110,7 @@ class Speech {
     this._session = null;
     this._pending = new Map();   // chunk id → resolve(msg)
     this._seq = 0;
+    this._dbg = {}; // counters for ?debug=speech
   }
 
   get speaking() { return this.state === 'speaking'; }
@@ -367,6 +368,8 @@ class Speech {
       }
       if (m.type === 'gen-error') { this._metric({ type: 'chunk-error', index: i, text: chunks[i], message: m.message }); continue; }
 
+      this._dbg.generated = (this._dbg.generated || 0) + 1;
+      this._dbg.lastRms = m.rms;
       const buf = ctx.createBuffer(1, m.samples.length, m.sampleRate);
       buf.copyToChannel(m.samples, 0);
       const src = ctx.createBufferSource();
@@ -374,6 +377,8 @@ class Speech {
       src.connect(ctx.destination);
       const start = Math.max(ctx.currentTime + 0.12, nextTime); // lead time absorbs scheduling jitter
       src.start(start);
+      this._dbg.scheduled = (this._dbg.scheduled || 0) + 1;
+      src.addEventListener('ended', () => { this._dbg.played = (this._dbg.played || 0) + 1; });
       this._scheduleCues(s, i, start, buf.duration);
       nextTime = start + buf.duration + SENTENCE_GAP;
       s.sources.push(src);
@@ -448,6 +453,9 @@ if (params.get('debug') === 'speech' && globalThis.document) {
       `synth speaking ${ss?.speaking}  pending ${ss?.pending}  paused ${ss?.paused}`,
       `voices ${ss?.getVoices().length ?? 'n/a'}  utterances started ${started}`,
       `last error ${speech._lastError || '-'}`,
+      `kokoro ${speech.info.device || '-'}/${speech.info.dtype || '-'}  ctx ${speech._ctx ? `${speech._ctx.state} t=${speech._ctx.currentTime.toFixed(1)} sr=${speech._ctx.sampleRate}` : '-'}`,
+      `chunks generated ${speech._dbg.generated || 0} scheduled ${speech._dbg.scheduled || 0} played ${speech._dbg.played || 0} rms ${speech._dbg.lastRms ? speech._dbg.lastRms.toFixed(3) : '-'}`,
+      `pointer coarse ${matchMedia('(pointer: coarse)').matches} anyFine ${matchMedia('(any-pointer: fine)').matches} audioSession ${navigator.audioSession ? navigator.audioSession.type : 'n/a'}`,
     ].join('\n');
   }, 250);
 }
