@@ -20,10 +20,11 @@ const DTYPE = { webgpu: 'fp32', wasm: 'q8' };
 // Hardware-aware WASM: multi-threaded inference needs SharedArrayBuffer, which browsers only
 // allow on cross-origin-isolated pages (serve.py sends COOP/COEP). Leave a couple of cores
 // for rendering and the audio thread; more than ~8 threads stops helping for an 82M model.
+let threadOverride = null; // ?ttsthreads=N from the page, for diagnosis
 function configureWasm() {
   const wasm = env?.backends?.onnx?.wasm;
   const cores = self.navigator?.hardwareConcurrency || 4;
-  const threads = self.crossOriginIsolated ? Math.max(1, Math.min(8, cores - 2)) : 1;
+  const threads = threadOverride ?? (self.crossOriginIsolated ? Math.max(1, Math.min(8, cores - 2)) : 1);
   if (wasm) wasm.numThreads = threads;
   return threads;
 }
@@ -80,7 +81,8 @@ async function tryLoad(device, dtype, voice) {
   return { model, loadMs, warmupMs: performance.now() - t1, threads };
 }
 
-async function load({ device = 'auto', dtype = null, voice = 'af_heart' } = {}) {
+async function load({ device = 'auto', dtype = null, voice = 'af_heart', threads = null } = {}) {
+  threadOverride = threads;
   const order = device === 'auto'
     ? (self.navigator?.gpu && (await navigator.gpu.requestAdapter({ powerPreference: 'high-performance' }).catch(() => null)) ? ['webgpu', 'wasm'] : ['wasm'])
     : [device];

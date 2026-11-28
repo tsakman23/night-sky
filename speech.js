@@ -108,6 +108,7 @@ class Speech {
     if (this.mode === 'auto' && (touchOnly || appleMobile)) this.mode = 'webspeech';
     this.device = params.get('ttsdevice') || 'auto'; // 'auto' | 'webgpu' | 'wasm'
     this.dtype = params.get('ttsdtype') || null;    // override, e.g. 'fp16'
+    this.threads = params.get('ttsthreads') ? Number(params.get('ttsthreads')) : null; // override WASM threads
     this.voice = VOICE;
     this.speed = SPEED;
     this._worker = null;
@@ -224,7 +225,7 @@ class Speech {
         }
       };
       this._set('loading', { progress: 0, message: 'Loading voice model…' });
-      worker.postMessage({ type: 'load', device: this.device, dtype: this.dtype, voice: this.voice });
+      worker.postMessage({ type: 'load', device: this.device, dtype: this.dtype, voice: this.voice, threads: this.threads });
     });
     return this._load;
   }
